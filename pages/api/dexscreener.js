@@ -22,42 +22,46 @@ export default async function handler(req, res) {
   const p = pools[0];
 
   // 3) Solscan meta
-  let tokenAgeDays=null,totalSupply=null,topHolders=[];
+  let tokenAgeDays = null, totalSupply = null, topHolders = [];
   try {
     const m = await fetch(
       `https://public-api.solscan.io/token/meta?tokenAddress=${address}`
     ).then(r=>r.json());
-    if(m.createTime) tokenAgeDays=(Date.now()/1000-m.createTime)/86400;
-    if(m.tokenAmount?.amount) totalSupply=Number(m.tokenAmount.amount)/(10**m.tokenAmount.decimals);
-    topHolders= (await fetch(
+    if (m.createTime) tokenAgeDays=(Date.now()/1000-m.createTime)/86400;
+    if (m.tokenAmount?.amount) totalSupply=Number(m.tokenAmount.amount)/(10**m.tokenAmount.decimals);
+    topHolders=(await fetch(
       `https://public-api.solscan.io/token/holders?tokenAddress=${address}&offset=0&limit=50`
     ).then(r=>r.json())).data||[];
-  }catch{}
+  } catch {}
 
   // 4) Single-wallet & bundling
-  let singlePct=0,top5Sum=0;
-  if(totalSupply&&topHolders.length){
-    const f=topHolders[0]; singlePct=Number(f.amount)/(10**f.decimals)/totalSupply;
+  let singlePct=0, top5Sum=0;
+  if (totalSupply && topHolders.length) {
+    const f = topHolders[0];
+    singlePct = Number(f.amount)/(10**f.decimals)/totalSupply;
     topHolders.slice(0,5).forEach(h=>top5Sum+=Number(h.amount)/(10**h.decimals)/totalSupply);
   }
-  const bundled=top5Sum>0.20;
+  const bundled = top5Sum>0.20;
 
-  // 5) Market Cap
-  const marketCap=p.fdv!=null?Number(p.fdv).toLocaleString():(p.liquidity?.usd||0).toLocaleString();
+  // 5) MarketCap
+  const marketCap = p.fdv!=null
+    ? Number(p.fdv).toLocaleString()
+    : (p.liquidity?.usd||0).toLocaleString();
 
   // 6) Buy/Sell ratio
-  const tx24=p.txns?.h24||{buys:0,sells:0},tot24=tx24.buys+tx24.sells;
-  const buySellRatio=tot24>0?tx24.buys/tot24:0.5;
+  const tx24 = p.txns?.h24||{buys:0,sells:0};
+  const tot24=tx24.buys+tx24.sells;
+  const bsRatio=tot24>0?tx24.buys/tot24:0.5;
 
   // 7) Weighted Buy Score
   const windowsBS=[{key:'m5',w:0.05},{key:'m15',w:0.10},{key:'h1',w:0.15},{key:'h6',w:0.25},{key:'h24',w:0.45}];
   let scoreSum=0;
   windowsBS.forEach(w=>{
-    const tx=p.txns?.[w.key]||{buys:0,sells:0},t=tx.buys+tx.sells,r=t>0?tx.buys/t:0.5;
+    const tx=p.txns?.[w.key]||{buys:0,sells:0}, tot=tx.buys+tx.sells, r=tot>0?tx.buys/tot:0.5;
     scoreSum+=r*w.w*100;
   });
-  const vol24=p.volume?.h24||0,volF=Math.log10(1+vol24);
-  let buyScore=scoreSum*(1+volF/10)*buySellRatio;
+  const vol24=p.volume?.h24||0, volF=Math.log10(1+vol24);
+  let buyScore=scoreSum*(1+volF/10)*bsRatio;
 
   // 8) Volatility
   const changes=windowsBS.map(w=>p.priceChange?.[w.key]||0);
@@ -65,8 +69,8 @@ export default async function handler(req, res) {
   const stdDev=Math.sqrt(changes.reduce((a,v)=>a+(v-mean)**2,0)/changes.length);
   if(stdDev>10) buyScore-=10;
 
-  // 9) MA crossover
-  const shortMA=p.priceChange?.m5||0,longMA=p.priceChange?.h1||0;
+  // 9) MA crossover (5m vs 1h)
+  const shortMA=p.priceChange?.m5||0, longMA=p.priceChange?.h1||0;
   if(shortMA>longMA) buyScore+=5; else if(shortMA<longMA) buyScore-=5;
 
   // 10) Bundling & single-wallet
@@ -76,15 +80,15 @@ export default async function handler(req, res) {
   // 11) Holder bonus
   if(topHolders.length>1) buyScore+=Math.min(10,Math.log10(topHolders.length)*2);
 
-  // 12) Reddit boost (Pushshift)
-  let mentionBoost=1;
+  // 12) Reddit hype (Pushshift)
+  let redditCount=0, mentionBoost=1;
   try {
     const since=Math.floor(Date.now()/1000)-86400;
     const rd=await fetch(
       `https://api.pushshift.io/reddit/comment/search?size=500&after=${since}&query=${address}`
     ).then(r=>r.json());
-    const mentions=rd.data?.length||0;
-    mentionBoost=1+Math.min(10,mentions/20)/100;
+    redditCount=rd.data?.length||0;
+    mentionBoost=1+Math.min(10,redditCount/20)/100;
   }catch{}
   buyScore*=mentionBoost;
 
@@ -95,7 +99,7 @@ export default async function handler(req, res) {
   rawRoi*=(1+volF/10);
   const liqUsd=p.liquidity?.usd||0;
   rawRoi*=(0.75+0.25*(Math.log10(1+liqUsd)/6));
-  rawRoi*=buySellRatio;
+  rawRoi*=bsRatio;
   if(shortMA>longMA) rawRoi*=1.05; else if(shortMA<longMA) rawRoi*=0.95;
   if(topHolders.length>1) rawRoi*=(1+Math.log10(topHolders.length)/10);
   rawRoi*=mentionBoost;
@@ -109,22 +113,24 @@ export default async function handler(req, res) {
   const warnings=[];
   if(p.labels?.includes('mintable')) warnings.push('Mintable');
   if(p.labels?.includes('freezable')) warnings.push('Freezable');
-  if(p.labels?.includes('honeypot')) warnings.push('Honeypot');
-  if(liqUsd<1000) warnings.push('Low liquidity (<$1k)');
-  if(singlePct>0.04) warnings.push('Single wallet >4%');
-  if(bundled) warnings.push('Bundled (top5 >20%)');
-  if(stdDev>10) warnings.push('High volatility');
-  if(shortMA>longMA) warnings.push('Golden cross');
-  if(shortMA<longMA) warnings.push('Death cross');
+  if(p.labels?.includes('honeypot'))  warnings.push('Honeypot');
+  if(liqUsd<1000)                    warnings.push('Low liquidity (<$1k)');
+  if(singlePct>0.04)                 warnings.push('Single wallet >4%');
+  if(bundled)                        warnings.push('Bundled (top5 >20%)');
+  if(stdDev>10)                      warnings.push('High volatility');
+  if(shortMA>longMA)                 warnings.push('Golden cross');
+  if(shortMA<longMA)                 warnings.push('Death cross');
 
+  // 16) Final JSON
   return res.status(200).json({
-    success:true,
+    success:        true,
     marketCap,
-    tokenAgeDays: tokenAgeDays?.toFixed(1) ?? 'N/A',
-    holders: holdersCount,
+    tokenAgeDays:   tokenAgeDays?.toFixed(1) ?? 'N/A',
+    holders:        holdersCount,
     top5Pct,
-    buyScore: buyScore.toString(),
+    buyScore:       buyScore.toString(),
     predictedRoi,
-    warnings
+    warnings,
+    redditCount
   });
 }
