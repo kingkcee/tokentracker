@@ -7,8 +7,9 @@ export default function Home() {
   const [dexResult,  setDex]  = useState(null);
 
   const scan = async (source) => {
-    setError('');            // clear error
-    setPump(null); setDex(null);
+    setError('');
+    setPump(null);
+    setDex(null);
     if (!address) {
       setError('Please enter a token address.');
       return;
@@ -31,35 +32,43 @@ export default function Home() {
   return (
     <main style={{ maxWidth: 600, margin: '40px auto', fontFamily: 'Arial, sans-serif' }}>
       <h1>Solana Token Checker</h1>
+
       <input
         type="text"
         placeholder="Paste token mint address"
         value={address}
         onChange={e => setAddress(e.target.value)}
-        style={{ width:'100%', padding:8, fontSize:16 }}
+        style={{ width: '100%', padding: 8, fontSize: 16 }}
       />
-      <div style={{ margin:'20px 0' }}>
-        <button onClick={() => scan('pumpfun')} style={{ marginRight:8, padding:'8px 16px' }}>
+
+      <div style={{ margin: '20px 0' }}>
+        <button
+          onClick={() => scan('pumpfun')}
+          style={{ marginRight: 8, padding: '8px 16px' }}
+        >
           Scan with Pump.fun
         </button>
-        <button onClick={() => scan('dexscreener')} style={{ padding:'8px 16px' }}>
+        <button
+          onClick={() => scan('dexscreener')}
+          style={{ padding: '8px 16px' }}
+        >
           Scan with DexScreener
         </button>
       </div>
-      {error && <p style={{ color:'red' }}>{error}</p>}
+
+      {error && <p style={{ color: 'red' }}>{error}</p>}
 
       {pumpResult && (
-        <section style={{ border:'1px solid #ccc', padding:12, marginBottom:20 }}>
+        <section style={{ border: '1px solid #ccc', padding: 12, marginBottom: 20 }}>
           <h2>Pump.fun Results</h2>
-          <p><strong>Name:</strong> {pumpResult.name} ({pumpResult.symbol})</p>
-          <p><strong>Price:</strong> {pumpResult.price} {pumpResult.priceCurrency}</p>
+          <p><strong>Market Cap (USD):</strong> ${pumpResult.marketCap}</p>
           <p><strong>Buy Score:</strong> {pumpResult.buyScore}%</p>
           <p><strong>Predicted ROI:</strong> {pumpResult.predictedRoi}</p>
           {pumpResult.warnings.length > 0 && (
             <div>
               <strong>Warnings:</strong>
               <ul>
-                {pumpResult.warnings.map((w,i)=><li key={i}>{w}</li>)}
+                {pumpResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             </div>
           )}
@@ -67,17 +76,16 @@ export default function Home() {
       )}
 
       {dexResult && (
-        <section style={{ border:'1px solid #ccc', padding:12 }}>
+        <section style={{ border: '1px solid #ccc', padding: 12 }}>
           <h2>DexScreener Results</h2>
-          <p><strong>Name:</strong> {dexResult.name} ({dexResult.symbol})</p>
-          <p><strong>Price (USD):</strong> ${dexResult.priceUsd}</p>
+          <p><strong>Market Cap (USD):</strong> ${dexResult.marketCap}</p>
           <p><strong>Buy Score:</strong> {dexResult.buyScore}%</p>
           <p><strong>Predicted ROI:</strong> {dexResult.predictedRoi}</p>
           {dexResult.warnings.length > 0 && (
             <div>
               <strong>Warnings:</strong>
               <ul>
-                {dexResult.warnings.map((w,i)=><li key={i}>{w}</li>)}
+                {dexResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             </div>
           )}
