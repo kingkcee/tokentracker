@@ -27,76 +27,108 @@ export default async function handler(req, res) {
   if (!coin) {
     return res
       .status(502)
-      .json({ success: false, error: `Pump.fun APIs down: ${lastErr}` });
+      .json({ success: false, error: `All Pump.fun APIs failed: ${lastErr}` });
   }
 
-  // 2) Destructure data
-  const pool = coin.pool || {};
-  const buyCount   = pool.buy_count    ?? 0;
-  const sellCount  = pool.sell_count   ?? 0;
-  const totalSol   = pool.total_sol_raised    ?? 0;
-  const recentVel  = pool.recent_buy_velocity ?? 0;
-  const holders    = coin.holder_count        ?? 0;
-  const holder24   = pool.holder_count_24h    ?? 0;
+  // 2) Destructure Pump.fun pool fields
+  const pool      = coin.pool || {};
+  const buyCount  = pool.buy_count    ?? 0;
+  const sellCount = pool.sell_count   ?? 0;
+  const totalSol  = pool.total_sol_raised    ?? 0;
+  const recentVel = pool.recent_buy_velocity ?? 0;
+  const liqLocked = !!pool.liquidity_locked;
+  const mintEn    = !!pool.mint_enabled;
+  const deplBuy   = !!pool.deployer_buying;
 
-  // 3) Multi-interval weighted momentum → raw ROI
+  // 3) Fetch Solscan meta: age & supply & top holders
+  let tokenAgeDays = null, totalSupply = null, topHolders = [];
+  try {
+    const meta = await fetch(
+      `https://public-api.solscan.io/token/meta?tokenAddress=${address}`
+    ).then(r => r.json());
+    if (meta.createTime) {
+      tokenAgeDays = (Date.now()/1000 - meta.createTime) / 86400;
+    }
+    if (meta.tokenAmount?.amount) {
+      totalSupply =
+        Number(meta.tokenAmount.amount) / (10 ** meta.tokenAmount.decimals);
+    }
+    const holderRes = await fetch(
+      `https://public-api.solscan.io/token/holders?tokenAddress=${address}&offset=0&limit=50`
+    ).then(r => r.json());
+    topHolders = holderRes.data || [];
+  } catch {
+    // ignore
+  }
+
+  // 4) Bundling detection: top 5 >20% of supply
+  let top5SumPct = 0;
+  if (totalSupply && topHolders.length) {
+    topHolders.slice(0,5).forEach(h => {
+      const amt = Number(h.amount) / (10 ** h.decimals);
+      top5SumPct += amt / totalSupply;
+    });
+  }
+  const bundled = top5SumPct > 0.20;
+
+  // 5) Compute advanced Predicted ROI
   const windows = [
-    { key: 'price_change_5m',  weight: 0.05 },
-    { key: 'price_change_15m', weight: 0.10 },
-    { key: 'price_change_1h',  weight: 0.15 },
-    { key: 'price_change_6h',  weight: 0.25 },
-    { key: 'price_change_24h', weight: 0.45 }
+    { key: 'price_change_5m',  w: 0.05 },
+    { key: 'price_change_15m', w: 0.10 },
+    { key: 'price_change_1h',  w: 0.15 },
+    { key: 'price_change_6h',  w: 0.25 },
+    { key: 'price_change_24h', w: 0.45 }
   ];
-  let rawRoi = windows.reduce((sum, w) => sum + ((pool[w.key] ?? 0) * w.weight), 0);
-
-  // 4) Volume-weight
-  const vol24 = pool.volume_24h_usd ?? 0;
-  const volF  = Math.log10(1 + vol24);
-  rawRoi *= (1 + volF / 10);
-
-  // 5) Liquidity adjustment
-  const liqUsd = pool.liquidity_usd ?? pool.liquidity?.usd ?? 0;
-  const liqF   = Math.log10(1 + liqUsd);
-  rawRoi *= (0.75 + 0.25 * (liqF / 6));
-
-  // 6) Buy/Sell ratio boost (0.5–1.0)
-  const totalTx = buyCount + sellCount;
-  const ratio   = totalTx > 0 ? (buyCount / totalTx) : 0.5;
-  rawRoi *= ratio;
-
-  // 7) Holder growth bonus (+ up to +10%)
-  rawRoi += Math.min(10, holder24 * 0.1);
-
+  let rawRoi = windows.reduce(
+    (sum, {key,w}) => sum + ((pool[key] ?? 0) * w),
+    0
+  );
+  const vol24     = pool.volume_24h_usd || 0;
+  const volFactor = Math.log10(1 + vol24);
+  rawRoi *= (1 + volFactor / 10);
+  const liqUsd    = pool.liquidity_usd || pool.liquidity?.usd || 0;
+  const liqFactor = Math.log10(1 + liqUsd);
+  rawRoi *= (0.75 + 0.25 * (liqFactor / 6));
+  // holder-growth boost
+  if (topHolders.length > 1) {
+    rawRoi *= 1 + (Math.log10(topHolders.length) / 10);
+  }
   const predictedRoi = rawRoi.toFixed(2) + '%';
 
-  // 8) Compute Buy Score (0–100) using same factors
+  // 6) Compute advanced Buy Score (WITHOUT age penalty)
   let buyScore = 100;
-  if (!pool.liquidity_locked) buyScore -= 30;
-  if (pool.mint_enabled)      buyScore -= 25;
-  if (!pool.deployer_buying)  buyScore -= 15;
-  if (totalTx < 20)           buyScore -= 10;
-  if (recentVel < 5)          buyScore -= 10;
-  if (totalSol < 1)           buyScore -= 10;
-  // apply buy/sell ratio and holder growth
-  buyScore = Math.round(Math.max(0, buyScore) * ratio + holder24 * 0.1);
-  buyScore = Math.min(100, buyScore);
+  if (!liqLocked)                 buyScore -= 30;
+  if (mintEn)                     buyScore -= 25;
+  if (!deplBuy)                   buyScore -= 15;
+  if (buyCount + sellCount < 20)  buyScore -= 10;
+  if (recentVel < 5)              buyScore -= 10;
+  if (totalSol < 1)               buyScore -= 10;
+  if (bundled)                    buyScore -= 20;  // bundled penalty only
+  buyScore = Math.max(0, Math.min(100, Math.round(buyScore)));
 
-  // 9) Market Cap & Warnings
-  const marketCap = coin.usd_market_cap != null
-    ? coin.usd_market_cap.toString()
+  // 7) Format numbers with commas
+  const marketCapRaw = coin.usd_market_cap  ?? 0;
+  const marketCap    = marketCapRaw.toLocaleString();
+  const holdersCount = totalSupply
+    ? totalSupply.toLocaleString()
     : 'N/A';
 
+  // 8) Build warnings (remove age warning)
   const warnings = [];
-  if (coin.nsfw)                 warnings.push('Marked NSFW');
-  if (coin.usd_market_cap < 1000)warnings.push('Low market cap (< $1k)');
-  if (pool.price_change_24h < -50)  warnings.push('Down >50% 24h');
-  if (pool.price_change_24h > 1000) warnings.push('Up >1000% 24h');
+  if (coin.nsfw)                            warnings.push('Marked NSFW');
+  if (marketCapRaw < 1000)                  warnings.push('Low market cap (<1 k USD)');
+  if (!liqLocked)                           warnings.push('Liquidity unlocked');
+  if (bundled)                              warnings.push('Possible bundling (top 5 > 20%)');
+  if (holdersCount !== 'N/A' && holdersCount < 100) warnings.push('Very few holders');
 
-  // 10) Return all fields
+  // 9) Return complete result
   return res.status(200).json({
-    success:      true,
+    success:        true,
     marketCap,
-    buyScore:     buyScore.toString(),
+    tokenAgeDays:   tokenAgeDays?.toFixed(1) ?? 'N/A',
+    holders:        holdersCount,
+    top5Pct:        (top5SumPct * 100).toFixed(2) + '%',
+    buyScore:       buyScore.toString(),
     predictedRoi,
     warnings
   });
