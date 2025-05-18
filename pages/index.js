@@ -18,14 +18,13 @@ export default function Home() {
       const res = await fetch(`/api/${source}?address=${encodeURIComponent(address)}`);
       const data = await res.json();
       if (!data.success) {
-        setError(data.error || 'Scan failed.');
-      } else if (source === 'pumpfun') {
-        setPump(data);
-      } else {
-        setDex(data);
+        throw new Error(data.error || 'Scan failed.');
       }
-    } catch {
-      setError('Network error.');
+      if (source === 'pumpfun') setPump(data);
+      else setDex(data);
+    } catch (err) {
+      console.error(err);
+      setError(err.message || 'Network error.');
     }
   };
 
@@ -42,16 +41,10 @@ export default function Home() {
       />
 
       <div style={{ margin: '20px 0' }}>
-        <button
-          onClick={() => scan('pumpfun')}
-          style={{ marginRight: 8, padding: '8px 16px' }}
-        >
+        <button onClick={() => scan('pumpfun')} style={{ marginRight: 8, padding: '8px 16px' }}>
           Scan with Pump.fun
         </button>
-        <button
-          onClick={() => scan('dexscreener')}
-          style={{ padding: '8px 16px' }}
-        >
+        <button onClick={() => scan('dexscreener')} style={{ padding: '8px 16px' }}>
           Scan with DexScreener
         </button>
       </div>
@@ -61,14 +54,14 @@ export default function Home() {
       {pumpResult && (
         <section style={{ border: '1px solid #ccc', padding: 12, marginBottom: 20 }}>
           <h2>Pump.fun Results</h2>
-          <p><strong>Market Cap (USD):</strong> ${pumpResult.marketCap}</p>
+          <p><strong>Market Cap (USD):</strong> ${pumpResult.marketCap ?? 'N/A'}</p>
           <p><strong>Buy Score:</strong> {pumpResult.buyScore}%</p>
           <p><strong>Predicted ROI:</strong> {pumpResult.predictedRoi}</p>
-          {pumpResult.warnings.length > 0 && (
+          { (pumpResult.warnings ?? []).length > 0 && (
             <div>
               <strong>Warnings:</strong>
               <ul>
-                {pumpResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                {(pumpResult.warnings ?? []).map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             </div>
           )}
@@ -81,16 +74,16 @@ export default function Home() {
           <p><strong>Market Cap (USD):</strong> ${dexResult.marketCap}</p>
           <p><strong>Buy Score:</strong> {dexResult.buyScore}%</p>
           <p><strong>Predicted ROI:</strong> {dexResult.predictedRoi}</p>
-          {dexResult.warnings.length > 0 && (
+          { (dexResult.warnings ?? []).length > 0 && (
             <div>
               <strong>Warnings:</strong>
               <ul>
-                {dexResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                {(dexResult.warnings ?? []).map((w, i) => <li key={i}>{w}</li>)}
               </ul>
             </div>
           )}
         </section>
       )}
     </main>
-  );
+);
 }
