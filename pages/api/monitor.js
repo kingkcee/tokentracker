@@ -8,8 +8,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: 'source & address required' });
   }
 
-  // Acknowledge the request; the Automations API will be used to schedule the checks.
+  // Acknowledge the monitoring request.
+  // The Automations API will handle scheduling checks every 5 minutes
+  // and notify you when buyScore drops below 40% or predictedRoi < 0%.
   return res.status(200).json({
-    message: `✅ Monitoring request received for ${address} via ${source}. I'll notify you when it's time to sell.`
+    message: `✅ Monitoring set up for ${address} via ${source}. You’ll be alerted when it’s time to sell.`
   });
 }
