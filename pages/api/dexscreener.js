@@ -17,72 +17,75 @@ export default async function handler(req, res) {
     return res.status(404).json({ success:false, error:err.message });
   }
 
-  // 2) Most liquid pool
+  // 2) Pick most liquid
   pools.sort((a,b)=>(b.liquidity?.usd||0)-(a.liquidity?.usd||0));
   const p = pools[0];
 
-  // 3) Solscan meta
-  let tokenAgeDays = null, totalSupply = null, topHolders = [];
-  try {
-    const m = await fetch(
+  // 3) Extract name & symbol
+  const name   = p.baseToken?.name   || p.pair?.baseToken?.name   || 'Unknown';
+  const symbol = p.baseToken?.symbol || p.pair?.baseToken?.symbol || '';
+
+  // 4) Solscan meta
+  let tokenAgeDays=null, totalSupply=null, topHolders=[];
+  try{
+    const m=await fetch(
       `https://public-api.solscan.io/token/meta?tokenAddress=${address}`
     ).then(r=>r.json());
-    if (m.createTime) tokenAgeDays=(Date.now()/1000-m.createTime)/86400;
-    if (m.tokenAmount?.amount) totalSupply=Number(m.tokenAmount.amount)/(10**m.tokenAmount.decimals);
+    if(m.createTime) tokenAgeDays=(Date.now()/1000-m.createTime)/86400;
+    if(m.tokenAmount?.amount) totalSupply=Number(m.tokenAmount.amount)/(10**m.tokenAmount.decimals);
     topHolders=(await fetch(
       `https://public-api.solscan.io/token/holders?tokenAddress=${address}&offset=0&limit=50`
     ).then(r=>r.json())).data||[];
-  } catch {}
+  }catch{}
 
-  // 4) Single-wallet & bundling
+  // 5) Concentration & bundling
   let singlePct=0, top5Sum=0;
-  if (totalSupply && topHolders.length) {
-    const f = topHolders[0];
-    singlePct = Number(f.amount)/(10**f.decimals)/totalSupply;
+  if(totalSupply && topHolders.length){
+    const f=topHolders[0];
+    singlePct=Number(f.amount)/(10**f.decimals)/totalSupply;
     topHolders.slice(0,5).forEach(h=>top5Sum+=Number(h.amount)/(10**h.decimals)/totalSupply);
   }
-  const bundled = top5Sum>0.20;
+  const bundled=top5Sum>0.20;
 
-  // 5) MarketCap
-  const marketCap = p.fdv!=null
+  // 6) Market cap
+  const marketCap= p.fdv!=null
     ? Number(p.fdv).toLocaleString()
     : (p.liquidity?.usd||0).toLocaleString();
 
-  // 6) Buy/Sell ratio
-  const tx24 = p.txns?.h24||{buys:0,sells:0};
-  const tot24=tx24.buys+tx24.sells;
-  const bsRatio=tot24>0?tx24.buys/tot24:0.5;
+  // 7) Buy/sell ratio
+  const tx24=p.txns?.h24||{buys:0,sells:0}, tot=tx24.buys+tx24.sells;
+  const bsRatio=tot>0?tx24.buys/tot:0.5;
 
-  // 7) Weighted Buy Score
+  // 8) Compute Buy Score
   const windowsBS=[{key:'m5',w:0.05},{key:'m15',w:0.10},{key:'h1',w:0.15},{key:'h6',w:0.25},{key:'h24',w:0.45}];
   let scoreSum=0;
-  windowsBS.forEach(w=>{
-    const tx=p.txns?.[w.key]||{buys:0,sells:0}, tot=tx.buys+tx.sells, r=tot>0?tx.buys/tot:0.5;
-    scoreSum+=r*w.w*100;
+  windowsBS.forEach(({key,w})=>{
+    const tx=p.txns?.[key]||{buys:0,sells:0},t=tx.buys+tx.sells,r=t>0?tx.buys/t:0.5;
+    scoreSum+=r*w*100;
   });
   const vol24=p.volume?.h24||0, volF=Math.log10(1+vol24);
   let buyScore=scoreSum*(1+volF/10)*bsRatio;
 
-  // 8) Volatility
+  // volatility
   const changes=windowsBS.map(w=>p.priceChange?.[w.key]||0);
   const mean=changes.reduce((a,b)=>a+b,0)/changes.length;
   const stdDev=Math.sqrt(changes.reduce((a,v)=>a+(v-mean)**2,0)/changes.length);
   if(stdDev>10) buyScore-=10;
 
-  // 9) MA crossover (5m vs 1h)
-  const shortMA=p.priceChange?.m5||0, longMA=p.priceChange?.h1||0;
+  // MA
+  const shortMA=p.priceChange?.m5||0,longMA=p.priceChange?.h1||0;
   if(shortMA>longMA) buyScore+=5; else if(shortMA<longMA) buyScore-=5;
 
-  // 10) Bundling & single-wallet
+  // bundling & single
   if(singlePct>0.04) buyScore-=20;
   if(bundled)        buyScore-=20;
 
-  // 11) Holder bonus
+  // holder bonus
   if(topHolders.length>1) buyScore+=Math.min(10,Math.log10(topHolders.length)*2);
 
-  // 12) Reddit hype (Pushshift)
+  // Reddit hype
   let redditCount=0, mentionBoost=1;
-  try {
+  try{
     const since=Math.floor(Date.now()/1000)-86400;
     const rd=await fetch(
       `https://api.pushshift.io/reddit/comment/search?size=500&after=${since}&query=${address}`
@@ -91,11 +94,10 @@ export default async function handler(req, res) {
     mentionBoost=1+Math.min(10,redditCount/20)/100;
   }catch{}
   buyScore*=mentionBoost;
-
   buyScore=Math.round(Math.max(0,Math.min(100,buyScore)));
 
-  // 13) Predicted ROI
-  let rawRoi=windowsBS.reduce((s,w)=>s+(p.priceChange?.[w.key]||0)*w.w,0);
+  // Predicted ROI
+  let rawRoi=windowsBS.reduce((s,{key,w})=>s+((p.priceChange?.[key]||0)*w),0);
   rawRoi*=(1+volF/10);
   const liqUsd=p.liquidity?.usd||0;
   rawRoi*=(0.75+0.25*(Math.log10(1+liqUsd)/6));
@@ -105,11 +107,7 @@ export default async function handler(req, res) {
   rawRoi*=mentionBoost;
   const predictedRoi=rawRoi.toFixed(2)+'%';
 
-  // 14) Format holders & top5%
-  const holdersCount=totalSupply?totalSupply.toLocaleString():'N/A';
-  const top5Pct=(top5Sum*100).toFixed(2)+'%';
-
-  // 15) Warnings
+  // warnings
   const warnings=[];
   if(p.labels?.includes('mintable')) warnings.push('Mintable');
   if(p.labels?.includes('freezable')) warnings.push('Freezable');
@@ -121,14 +119,16 @@ export default async function handler(req, res) {
   if(shortMA>longMA)                 warnings.push('Golden cross');
   if(shortMA<longMA)                 warnings.push('Death cross');
 
-  // 16) Final JSON
+  // final
   return res.status(200).json({
-    success:        true,
+    success:      true,
+    name,
+    symbol,
     marketCap,
-    tokenAgeDays:   tokenAgeDays?.toFixed(1) ?? 'N/A',
-    holders:        holdersCount,
-    top5Pct,
-    buyScore:       buyScore.toString(),
+    tokenAgeDays: tokenAgeDays?.toFixed(1)??'N/A',
+    holders:      totalSupply?totalSupply.toLocaleString():'N/A',
+    top5Pct:      (top5Sum*100).toFixed(2)+'%',
+    buyScore:     buyScore.toString(),
     predictedRoi,
     warnings,
     redditCount
