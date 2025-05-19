@@ -69,15 +69,13 @@ export default function Home() {
         </button>
       </div>
 
-      {loading && (
-        <div className="spinner" />
-      )}
+      {loading && <div className="spinner" />}
 
       {error && <p className="error">{error}</p>}
 
       {pumpResult && (
         <section className="card">
-          <h2>Pump.fun Results</h2>
+          <h2>{pumpResult.name} ({pumpResult.symbol})</h2>
           <p><strong>Market Cap (USD):</strong> ${pumpResult.marketCap}</p>
           <p><strong>Buy Score:</strong> {pumpResult.buyScore}%</p>
           <p><strong>Predicted ROI:</strong> {pumpResult.predictedRoi}</p>
@@ -89,15 +87,13 @@ export default function Home() {
               </ul>
             </div>
           )}
-          <button onClick={()=>monitor('pumpfun')}>
-            Ape & Monitor
-          </button>
+          <button onClick={()=>monitor('pumpfun')}>Ape & Monitor</button>
         </section>
       )}
 
       {dexResult && (
         <section className="card">
-          <h2>DexScreener Results</h2>
+          <h2>{dexResult.name} ({dexResult.symbol})</h2>
           <p><strong>Market Cap (USD):</strong> ${dexResult.marketCap}</p>
           <p><strong>Buy Score:</strong> {dexResult.buyScore}%</p>
           <p><strong>Predicted ROI:</strong> {dexResult.predictedRoi}</p>
@@ -109,9 +105,7 @@ export default function Home() {
               </ul>
             </div>
           )}
-          <button onClick={()=>monitor('dexscreener')}>
-            Ape & Monitor
-          </button>
+          <button onClick={()=>monitor('dexscreener')}>Ape & Monitor</button>
         </section>
       )}
 
